@@ -1,0 +1,122 @@
+name: SchemaBot
+description: Block pull requests that break a data contract feeding a RAG or ingestion pipeline.
+author: SchemaBot contributors
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  root:
+    description: Project root inside the repository. Contract paths are relative to it.
+    default: "."
+  contracts:
+    description: Directory of contract YAML files, relative to root.
+    default: contracts
+  base:
+    description: Git revision to compare with. Defaults to the pull request's base commit.
+    default: ""
+  fail-on:
+    description: "Fail at this severity or worse: breaking, reindex, warning, info or never."
+    default: breaking
+  comment:
+    description: Post (and update) a sticky comment on the pull request.
+    default: "true"
+  explain:
+    description: Add an AI-written summary to the comment. Needs anthropic-api-key.
+    default: "false"
+  anthropic-api-key:
+    description: Anthropic API key, only used when explain is true.
+    default: ""
+  model:
+    description: Claude model for the summary. Defaults to claude-opus-5-5.
+    default: ""
+  sarif-file:
+    description: Also write a SARIF report to this path, for github/codeql-action/upload-sarif.
+    default: ""
+  python-version:
+    description: Python used to run SchemaBot.
+    default: "3.12"
+  github-token:
+    description: Token used to post the pull request comment.
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: 0 passed, 1 a finding at or above fail-on, 2 setup error.
+    value: ${{ steps.check.outputs.exit-code }}
+  report:
+    description: Path to the Markdown report.
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install SchemaBot
+      shell: bash
+      env:
+        EXPLAIN: ${{ inputs.explain }}
+      run: |
+        extra=""
+        if [ "$EXPLAIN" = "true" ]; then extra="[llm]"; fi
+        python -m pip install --quiet --disable-pip-version-check "${GITHUB_ACTION_PATH}${extra}"
+
+    - name: Check data contracts
+      id: check
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root }}
+        CONTRACTS: ${{ inputs.contracts }}
+        BASE: ${{ inputs.base }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        EXPLAIN: ${{ inputs.explain }}
+        MODEL: ${{ inputs.model }}
+        SARIF: ${{ inputs.sarif-file }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        report="$RUNNER_TEMP/schemabot.md"
+        base="${BASE:-$PR_BASE_SHA}"
+        if [ -n "$base" ] && ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          git fetch --no-tags --depth=1 origin "$base"
+        fi
+        args=(check --root "$ROOT" --contracts "$CONTRACTS" --fail-on "$FAIL_ON" --markdown "$report")
+        if [ -n "$base" ]; then args+=(--base "$base"); fi
+        if [ -n "$SARIF" ]; then args+=(--sarif "$SARIF"); fi
+        if [ "$EXPLAIN" = "true" ]; then args+=(--explain); fi
+        if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+        set +e
+        schemabot "${args[@]}"
+        code=$?
+        set -e
+        if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event.pull_request.number && steps.check.outputs.exit-code != '2'
+      continue-on-error: true  # read-only tokens on fork PRs cannot comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        REPORT: ${{ steps.check.outputs.report }}
+      run: |
+        marker='<!-- schemabot-report -->'
+        id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | tail -n 1)
+        if [ -n "$id" ]; then
+          gh api --silent -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$REPORT"
+        else
+          gh api --silent -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$REPORT"
+        fi
+
+    - name: Apply the result
+      shell: bash
+      env:
+        CODE: ${{ steps.check.outputs.exit-code }}
+      run: exit "${CODE:-2}"

@@ -1,0 +1,22 @@
+apiVersion: v3.0.0
+kind: DataContract
+id: kb-articles
+owner: docs-team
+source:
+  type: pydantic
+  schemaFrom: app/models.py
+  model: KBArticle
+schema:
+  - {name: id,           type: uuid,      required: true, primaryKey: true}
+  - {name: workspace_id, type: uuid,      required: true}
+  - {name: title,        type: string,    required: true}
+  - {name: content,      type: string,    required: true}
+  - {name: author_email, type: string,    classification: pii}
+  - {name: published_at, type: timestamp, required: true}
+rag:
+  embed: [title, content]
+  filterKeys: [workspace_id]
+  code: [ingest/kb.py]
+  index:
+    model: text-embedding-3-small
+    dimension: 1536
