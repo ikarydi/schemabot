@@ -1,0 +1,25 @@
+# What the support-ticket RAG pipeline may read, embed and filter on.
+apiVersion: v3.0.0
+kind: DataContract
+id: support-tickets
+owner: support-platform
+source:
+  type: postgres
+  schemaFrom: migrations/          # replayed in file-name order
+  table: public.support_tickets
+schema:
+  - {name: id,             type: uuid,      required: true, primaryKey: true}
+  - {name: tenant_id,      type: uuid,      required: true}
+  - {name: subject,        type: text,      required: true}
+  - {name: body,           type: text,      required: true}
+  - {name: customer_email, type: text,      classification: pii}
+  - {name: updated_at,     type: timestamp, required: true}
+rag:
+  embed: [subject, body]           # only these may be chunked and embedded
+  neverEmbed: [customer_email]     # fails the PR if it reaches the embedder
+  filterKeys: [tenant_id]          # the retriever must filter on these
+  code: [ingest/tickets.py]        # where SchemaBot looks for embed calls
+  index:
+    model: text-embedding-3-small
+    dimension: 1536
+    chunking: {strategy: recursive, size: 800, overlap: 100}

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "schemabot"
+version = "0.1.0"
+description = "Data contracts for RAG and ingestion pipelines, checked on every pull request."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "SchemaBot contributors" }]
+keywords = ["data contracts", "rag", "schema drift", "github action", "embeddings"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "sqlglot>=25.0",
+]
+
+[project.optional-dependencies]
+llm = ["anthropic>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+schemabot = "schemabot.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ikarydi/schemabot"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/schemabot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
