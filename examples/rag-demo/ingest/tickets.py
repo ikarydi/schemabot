@@ -6,7 +6,7 @@ SELECT_TICKETS = "SELECT id, tenant_id, subject, body FROM public.support_ticket
 
 
 def ticket_text(ticket) -> str:
-    return f"{ticket['subject']}\n\n{ticket['body']}\nFrom: {ticket['customer_email']}"
+    return f"{ticket['subject']}\n\n{ticket['body']}"
 
 
 def index_tickets(conn, vector_store, since):
