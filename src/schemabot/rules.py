@@ -12,8 +12,10 @@ import re
 from dataclasses import dataclass
 
 from .contract import Contract
-from .governance import AISystem, Manifest, PolicyPack
 from .extract import TableSchema
+from .governance import AISystem, Manifest, PolicyPack
+from .lineage import Lineage, ProviderUse
+from .providers import region_allowed
 from .findings import Finding, Severity
 from .scan import EmbedRef, QueryScan
 from .types import compatible
@@ -48,6 +50,9 @@ RULES: dict[str, Rule] = {
         Rule("undeclared-ai-system", B, "Contract feeds an embedder that no AI system declares"),
         Rule("purpose-not-allowed", B, "AI system uses data for a purpose the contract does not allow"),
         Rule("use-not-allowed", B, "AI system uses data in a way the contract or policy forbids"),
+        Rule("provider-not-allowed", B, "Data reaches a model provider the contract or policy does not allow"),
+        Rule("residency-violation", B, "Data is processed in a region outside the contract's residency"),
+        Rule("undeclared-training", B, "Code starts a fine-tuning job that no fine-tuning AI system declares"),
         Rule("index-changed", R, "Embedding model, dimension or chunking changed"),
         Rule("embed-scope-changed", R, "Set of embedded fields changed"),
         Rule("embedded-type-changed", R, "Type of an embedded field changed"),
@@ -62,6 +67,9 @@ RULES: dict[str, Rule] = {
         Rule("embed-scope-undeclared", W, "RAG contract does not declare rag.embed"),
         Rule("governance-missing", W, "Contract feeds an AI system but has no governance block"),
         Rule("risk-class-missing", W, "AI system declares no risk class"),
+        Rule("provider-undeclared", W, "Code calls a model provider the AI system does not declare"),
+        Rule("region-undeclared", W, "Provider region unknown, so residency cannot be checked"),
+        Rule("provider-changed", W, "AI system changed its model or embedding providers"),
         Rule("field-undeclared", I, "New source column not in the contract"),
         Rule("contract-added", I, "New contract"),
         Rule("ai-system-added", I, "New AI system"),
@@ -447,13 +455,13 @@ def embed_scope(
     return out
 
 
-def _g(rule: str, message: str, contract: str | None, system: AISystem | None, file: str, **kw) -> Finding:
+def _g(rule: str, message: str, contract: str | None, system: AISystem | str | None, file: str, **kw) -> Finding:
     return Finding(
         rule=rule,
         severity=RULES[rule].severity,
         message=message,
         contract=contract,
-        system=system.id if system else None,
+        system=system.id if isinstance(system, AISystem) else system,
         file=file,
         **kw,
     )
@@ -579,13 +587,154 @@ def governance(contracts: list[Contract], manifest: Manifest | None, policies: P
     return out
 
 
+def _describe(p: ProviderUse) -> str:
+    details = ", ".join(x for x in (p.role, p.model, p.region and f"region {p.region}") if x)
+    return f"`{p.name}`" + (f" ({details})" if details else "")
+
+
+def _where(p: ProviderUse) -> dict:
+    return {"file": p.file or "", "line": p.line}
+
+
+def providers(lineage: Lineage | None, contracts: list[Contract], policies: PolicyPack | None) -> list[Finding]:
+    """Which providers and regions each AI system's inputs reach, against what the contracts and policies allow."""
+    if lineage is None:
+        return []
+    out: list[Finding] = []
+    by_id = {c.id: c for c in contracts}
+    allow_rules = policies.allowed_providers if policies else []
+    for system in lineage.systems:
+        for p in system.providers:
+            if not p.declared and not p.matches_declared:
+                out.append(
+                    _g(
+                        "provider-undeclared",
+                        f"`{p.via}` sends data from AI system `{system.id}` to {_describe(p)}, which "
+                        f"{lineage.manifest_path} does not list among its providers.",
+                        None,
+                        system.id,
+                        provider=p.name,
+                        hint="Declare the provider, its role and its region in the manifest.",
+                        **_where(p),
+                    )
+                )
+        # One entry per provider name, preferring the declared one for locations.
+        names: dict[str, ProviderUse] = {}
+        for p in sorted(system.providers, key=lambda p: not p.declared):
+            names.setdefault(p.name, p)
+        for inp in system.inputs:
+            contract = by_id[inp.contract]
+            gov = contract.governance
+            for name, p in names.items():
+                if gov and gov.allowed_providers and name not in {a.lower() for a in gov.allowed_providers}:
+                    allowed = ", ".join(f"`{a}`" for a in gov.allowed_providers)
+                    out.append(
+                        _g(
+                            "provider-not-allowed",
+                            f"AI system `{system.id}` sends `{contract.id}` to `{name}`, but the contract allows only {allowed}.",
+                            contract.id,
+                            system.id,
+                            provider=name,
+                            **_where(p),
+                        )
+                    )
+                for rule in allow_rules:
+                    if name in {a.lower() for a in rule.providers}:
+                        continue
+                    for f in contract.fields:
+                        if (f.classification or "").lower() != rule.classification.lower():
+                            continue
+                        out.append(
+                            _g(
+                                "provider-not-allowed",
+                                f"AI system `{system.id}` sends `{contract.id}` to `{name}`, but `{f.name}` is classified "
+                                f"`{f.classification}` and {policies.path} allows only "  # type: ignore[union-attr]
+                                + ", ".join(f"`{a}`" for a in rule.providers)
+                                + ".",
+                                contract.id,
+                                system.id,
+                                field=f.name,
+                                provider=name,
+                                hint="Use an allowed provider, or keep the field out of this system's input.",
+                                **_where(p),
+                            )
+                        )
+            if not (gov and gov.residency):
+                continue
+            zones = ", ".join(f"`{r}`" for r in gov.residency)
+            for p in system.providers:
+                if p.name == "local" or (not p.declared and p.matches_declared and not p.region):
+                    continue
+                if p.region is None:
+                    out.append(
+                        _g(
+                            "region-undeclared",
+                            f"`{contract.id}` must stay in {zones}, but AI system `{system.id}` declares no region "
+                            f"for {_describe(p)}.",
+                            contract.id,
+                            system.id,
+                            provider=p.name,
+                            hint="Add `region:` to the provider in the manifest, or pass it in code.",
+                            **_where(p),
+                        )
+                    )
+                elif not region_allowed(p.region, gov.residency):
+                    out.append(
+                        _g(
+                            "residency-violation",
+                            f"`{contract.id}` must stay in {zones}, but AI system `{system.id}` sends it to "
+                            f"{_describe(p)}.",
+                            contract.id,
+                            system.id,
+                            provider=p.name,
+                            hint="Use a region inside the contract's residency, or have the data owner change it.",
+                            **_where(p),
+                        )
+                    )
+    finetune_files = {f for s in lineage.systems if s.use == "finetune" for f in s.files}
+    for t in lineage.training:
+        if t.file in finetune_files:
+            continue
+        owners = lineage.contract_files.get(t.file, [])
+        out.append(
+            _g(
+                "undeclared-training",
+                f"`{t.via}` starts a fine-tuning job, but no AI system with `use: finetune` covers `{t.file}`.",
+                owners[0] if owners else None,
+                None,
+                t.file,
+                line=t.line,
+                hint="Declare the fine-tuning system and its inputs, so the contracts' allowed uses are checked.",
+            )
+        )
+    return out
+
+
 def systems_evolution(base: Manifest | None, head: Manifest | None) -> list[Finding]:
     """What changed in the manifest between base and head."""
     if head is None:
         return []
-    old = {s.id for s in base.systems} if base else set()
-    return [
-        _g("ai-system-added", f"New AI system `{s.id}` ({s.use}).", None, s, head.path)
-        for s in head.systems
-        if s.id not in old
-    ]
+    old = {s.id: s for s in base.systems} if base else {}
+    out: list[Finding] = []
+    for s in head.systems:
+        before = old.get(s.id)
+        if before is None:
+            out.append(_g("ai-system-added", f"New AI system `{s.id}` ({s.use}).", None, s, head.path))
+            continue
+        as_set = lambda sys: {(p.name.lower(), p.role, p.model, p.region) for p in sys.providers}  # noqa: E731
+        if as_set(before) != as_set(s):
+            fmt = lambda items: ", ".join(  # noqa: E731
+                "/".join(x for x in item if x) for item in sorted(items, key=str)
+            ) or "none"
+            out.append(
+                _g(
+                    "provider-changed",
+                    f"AI system `{s.id}` changed providers (added: {fmt(as_set(s) - as_set(before))}; "
+                    f"removed: {fmt(as_set(before) - as_set(s))}).",
+                    None,
+                    s,
+                    head.path,
+                    hint="A new embedding provider or model needs a re-index; a new provider may need a DPA review.",
+                )
+            )
+    return out

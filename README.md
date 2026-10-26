@@ -16,8 +16,9 @@ data.
 
 With an AI systems manifest it also governs **what data feeds which AI system**:
 a pull request fails when a system uses data for a purpose or a use (RAG,
-fine-tuning, evaluation) that the data's contract does not allow, or when code
-embeds data that no declared AI system accounts for.
+fine-tuning, evaluation) that the data's contract does not allow, sends it to a
+model provider or region the contract or policy does not allow, or when code
+embeds data or starts a fine-tuning job that no declared AI system accounts for.
 
 Everything runs inside your own CI. No data, credentials or code leave the
 runner, and there is no SchemaBot server.
@@ -119,7 +120,8 @@ Governance is opt-in: it runs when the project has an `ai-systems.yaml`.
      purposes: [support-search, agent-assist]   # what AI systems may use it for
      allowedUses: [rag]                         # rag | finetune | eval | prompt
      legalBasis: legitimate-interest
-     residency: [eu]
+     residency: [eu]                            # regions or zones (eu, us, ...)
+     allowedProviders: [openai, anthropic]      # optional
      retention: {days: 365, erasure: true}
      deletion: ingest/tickets.py:delete_ticket
      approvers: ["@acme/privacy"]
@@ -150,11 +152,25 @@ Governance is opt-in: it runs when the project has an `ai-systems.yaml`.
    forbiddenUses:
      - {classification: pii, uses: [finetune]}
      - {classification: phi, uses: [finetune, eval]}
+   allowedProviders:                  # where fields of a classification may be sent
+     - {classification: pii, providers: [openai, anthropic, local]}
    ```
 
-`residency`, `retention`, `deletion`, `approvers` and `providers` are recorded
-now and checked by upcoming rules (provider and region allow-lists, the erasure
-path to the vector store, and approval of relaxed governance). Use `--systems`
+SchemaBot also scans each system's code (its `code` paths and the `rag.code` of
+its inputs) for model provider clients (OpenAI, Azure OpenAI, Anthropic,
+Bedrock, Vertex, Cohere, Voyage, Mistral, Google, Hugging Face, and local
+models), reads `region`/`region_name`/`location` and `model` when they are
+string literals, and finds fine-tuning calls (`fine_tuning.jobs.create`,
+`Trainer`, `SFTTrainer`). Regions are matched by zone, so `eu-west-1`,
+`europe-west4` and `westeurope` all satisfy `residency: [eu]`. Local models are
+exempt from residency.
+
+`schemabot lineage` prints the resulting graph (contracts → AI systems →
+providers) as text, JSON or a Mermaid flowchart.
+
+`retention`, `deletion` and `approvers` are recorded now and checked by
+upcoming rules (the erasure path to the vector store, and approval of relaxed
+governance). Use `--systems`
 and `--policies` (or the Action inputs of the same name) for other file paths.
 
 ## Rules
@@ -176,6 +192,9 @@ and `--policies` (or the Action inputs of the same name) for other file paths.
 | 🛑 breaking | `purpose-not-allowed` | An AI system uses a contract for a purpose the contract does not list. |
 | 🛑 breaking | `use-not-allowed` | An AI system's use (RAG, fine-tuning, ...) is not in the contract's `allowedUses`, or the policy pack forbids it for a field's classification. |
 | 🛑 breaking | `undeclared-ai-system` | A contract feeds an embedder, but no AI system lists it as an input. |
+| 🛑 breaking | `provider-not-allowed` | An AI system sends a contract's data to a provider outside the contract's `allowedProviders`, or the policy's allow-list for a field's classification. |
+| 🛑 breaking | `residency-violation` | A provider region (declared or in code) is outside the contract's `residency`. |
+| 🛑 breaking | `undeclared-training` | Code starts a fine-tuning job that no `use: finetune` AI system covers. |
 | 🛑 breaking | `ai-input-missing` | An AI system lists an input that is not a contract id. |
 | 🛑 breaking | `manifest-invalid` | `ai-systems.yaml` or `policies.yaml` does not parse or validate. |
 | 🔁 re-index | `index-changed` | Embedding model, dimension or chunking changed. |
@@ -189,6 +208,9 @@ and `--policies` (or the Action inputs of the same name) for other file paths.
 | ⚠️ warning | `no-filter-keys` / `embed-scope-undeclared` | The `rag` block is missing filter keys or the embed list. |
 | ⚠️ warning | `governance-missing` | A contract that feeds an AI system holds sensitive fields (or the policy pack requires governance) but has no `governance` block. |
 | ⚠️ warning | `risk-class-missing` | An AI system declares no `riskClass`. |
+| ⚠️ warning | `provider-undeclared` | Code calls a provider the AI system does not declare. |
+| ⚠️ warning | `region-undeclared` | A contract has `residency`, but a provider it reaches has no known region. |
+| ⚠️ warning | `provider-changed` | An AI system's declared providers, models or regions changed. |
 | ℹ️ info | `field-undeclared` / `contract-added` / `ai-system-added` | New column not in the contract; new contract; new AI system. |
 
 Problems that already exist on the base branch are reported as pre-existing and
@@ -230,6 +252,7 @@ pip install git+https://github.com/ikarydi/schemabot
 schemabot validate                       # contracts vs. the working tree
 schemabot check --base origin/main       # what this branch changes
 schemabot check --base origin/main --format markdown --fail-on reindex
+schemabot lineage --format mermaid         # which data feeds which AI system and provider
 ```
 
 Exit codes: `0` passed, `1` a finding at or above `--fail-on`, `2` usage or setup error.

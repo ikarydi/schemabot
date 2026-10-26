@@ -5,3 +5,5 @@ requireGovernance: true
 forbiddenUses:
   - {classification: pii, uses: [finetune]}
   - {classification: phi, uses: [finetune, eval]}
+allowedProviders:                # where personal data may be sent
+  - {classification: pii, providers: [openai, anthropic, local]}

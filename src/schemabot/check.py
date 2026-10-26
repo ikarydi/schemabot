@@ -6,7 +6,8 @@ from .contract import Contract, ContractError, load_contracts
 from .extract import TableSchema, extract
 from .findings import CheckResult, ContractResult, Finding, Severity
 from .governance import Manifest, load_manifest, load_policies
-from .rules import RULES, conformance, drift, embed_scope, evolution, governance, policy, systems_evolution
+from .lineage import Lineage, build_lineage
+from .rules import RULES, conformance, drift, embed_scope, evolution, governance, policy, providers, systems_evolution
 from .scan import QueryScan, scan_code, scan_query
 from .snapshot import Snapshot
 
@@ -49,7 +50,7 @@ def _state_findings(
 
 def _governance(
     snapshot: Snapshot, contracts: list[Contract], systems: str, policies: str
-) -> tuple[Manifest | None, list[Finding]]:
+) -> tuple[Manifest | None, Lineage | None, list[Finding]]:
     """Load the manifest and policy pack and run the governance rules over them."""
     errors: list[Finding] = []
     manifest = pack = None
@@ -61,7 +62,9 @@ def _governance(
         pack = load_policies(snapshot, policies)
     except ContractError as exc:
         errors.append(_manifest_invalid(exc))
-    return manifest, errors + governance(contracts, manifest, pack)
+    lineage: Lineage | None = build_lineage(snapshot, contracts, manifest) if manifest else None
+    findings = errors + governance(contracts, manifest, pack) + providers(lineage, contracts, pack)
+    return manifest, lineage, findings
 
 
 def _manifest_invalid(err: ContractError) -> Finding:
@@ -163,9 +166,9 @@ def run_check(
             )
         )
 
-    head_manifest, gov_findings = _governance(head, head_contracts, systems, policies)
+    head_manifest, lineage, gov_findings = _governance(head, head_contracts, systems, policies)
     if base is not None:
-        base_manifest, base_gov = _governance(base, list(base_contracts.values()), systems, policies)
+        base_manifest, _, base_gov = _governance(base, list(base_contracts.values()), systems, policies)
         gov_findings += systems_evolution(base_manifest, head_manifest)
         baseline = {f.key() for f in base_gov}
         for f in gov_findings:
@@ -175,7 +178,9 @@ def run_check(
     for f in gov_findings:
         target = by_id.get(f.contract or "")
         (target or systems_result).findings.append(f)
-    if systems_result.findings:
+    if lineage is not None:
+        systems_result.warnings.extend(lineage.warnings)
+    if systems_result.findings or systems_result.warnings:
         result.results.append(systems_result)
 
     for res in result.results:

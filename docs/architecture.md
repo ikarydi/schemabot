@@ -30,6 +30,8 @@ pull request ──► GitHub Actions runner (customer's repo, no SchemaBot serv
 | `check.py` | Runs base vs head, marks pre-existing findings. |
 | `report.py` | Markdown, text, JSON and SARIF output. |
 | `governance.py` | AI systems manifest and org policy pack; models and loaders. |
+| `providers.py` | Finds model provider clients, regions and fine-tuning calls in pipeline code. |
+| `lineage.py` | Builds the contract → AI system → provider graph; text, JSON and Mermaid output. |
 | `explain.py` | Optional Claude summary (`schemabot[llm]`). |
 | `cli.py` / `action.yml` | Entry points. |
 
@@ -68,7 +70,7 @@ the governance architecture doc.
 | G8 | Positioning | One product, SchemaBot with governance | One install, one contract. |
 
 Build phases: (1) governance block, manifest, policy pack and the first rules
-(this release); (2) provider and region detection, lineage graph; (3) erasure
+(v0.2.0); (2) provider and region detection, lineage graph (v0.3.0); (3) erasure
 and retention; (4) approvals, `schemabot inventory` and `schemabot evidence`;
 (5) hosted App features.
 

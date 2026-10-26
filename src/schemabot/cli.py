@@ -97,6 +97,28 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 1 if result.fails(args.fail_on) else 0
 
 
+def cmd_lineage(args: argparse.Namespace) -> int:
+    from . import lineage as lin
+    from .contract import ContractError
+    from .governance import load_manifest
+
+    root = Path(args.root)
+    head = WorkingTree(root)
+    contracts, _ = load_contracts(head, args.contracts)
+    try:
+        manifest = load_manifest(head, args.systems)
+    except ContractError as exc:
+        print(f"schemabot: {exc}", file=sys.stderr)
+        return 2
+    if manifest is None:
+        print(f"schemabot: no AI systems manifest at {args.systems}", file=sys.stderr)
+        return 2
+    graph = lin.build_lineage(head, contracts, manifest)
+    render = {"text": lin.to_text, "json": lin.to_json, "mermaid": lin.to_mermaid}[args.format]
+    sys.stdout.write(render(graph))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="schemabot",
@@ -146,6 +168,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = sub.add_parser("validate", parents=[common], help="check contracts and sources at the working tree only")
     validate.set_defaults(func=cmd_validate)
+
+    lineage = sub.add_parser(
+        "lineage", parents=[common], help="print which sources feed which AI systems and providers"
+    )
+    lineage.add_argument("--format", choices=["text", "json", "mermaid"], default="text")
+    lineage.set_defaults(func=cmd_lineage)
     return parser
 
 
