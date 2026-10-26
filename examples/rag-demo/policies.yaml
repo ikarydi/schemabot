@@ -1,0 +1,7 @@
+# Rules that apply to every contract in this repository.
+apiVersion: v1
+kind: PolicyPack
+requireGovernance: true
+forbiddenUses:
+  - {classification: pii, uses: [finetune]}
+  - {classification: phi, uses: [finetune, eval]}

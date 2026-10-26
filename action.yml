@@ -12,6 +12,12 @@ inputs:
   contracts:
     description: Directory of contract YAML files, relative to root.
     default: contracts
+  systems:
+    description: AI systems manifest, relative to root. Governance rules run when it exists.
+    default: ai-systems.yaml
+  policies:
+    description: Org policy pack, relative to root.
+    default: policies.yaml
   base:
     description: Git revision to compare with. Defaults to the pull request's base commit.
     default: ""
@@ -70,6 +76,8 @@ runs:
       env:
         ROOT: ${{ inputs.root }}
         CONTRACTS: ${{ inputs.contracts }}
+        SYSTEMS: ${{ inputs.systems }}
+        POLICIES: ${{ inputs.policies }}
         BASE: ${{ inputs.base }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         FAIL_ON: ${{ inputs.fail-on }}
@@ -83,7 +91,7 @@ runs:
         if [ -n "$base" ] && ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
           git fetch --no-tags --depth=1 origin "$base"
         fi
-        args=(check --root "$ROOT" --contracts "$CONTRACTS" --fail-on "$FAIL_ON" --markdown "$report")
+        args=(check --root "$ROOT" --contracts "$CONTRACTS" --systems "$SYSTEMS" --policies "$POLICIES" --fail-on "$FAIL_ON" --markdown "$report")
         if [ -n "$base" ]; then args+=(--base "$base"); fi
         if [ -n "$SARIF" ]; then args+=(--sarif "$SARIF"); fi
         if [ "$EXPLAIN" = "true" ]; then args+=(--explain); fi

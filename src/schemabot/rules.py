@@ -1,8 +1,9 @@
 """The deterministic rule engine.
 
-Every pass/fail decision is made here, from four inputs: the contract at base
-and head, the source schema at base and head, and the embed-scope scan. No
-LLM is involved; the same inputs always give the same findings.
+Every pass/fail decision is made here, from the contract at base and head, the
+source schema at base and head, the embed-scope scan, and (for governance) the
+AI systems manifest and policy pack. No LLM is involved; the same inputs always
+give the same findings.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from .contract import Contract
+from .governance import AISystem, Manifest, PolicyPack
 from .extract import TableSchema
 from .findings import Finding, Severity
 from .scan import EmbedRef, QueryScan
@@ -40,7 +42,12 @@ RULES: dict[str, Rule] = {
         Rule("filter-key-removed", B, "Filter key removed from the contract"),
         Rule("contract-type-changed", B, "Contract changed a field's type"),
         Rule("contract-guarantee-relaxed", B, "Contract made a required field optional"),
-                Rule("embed-query-star", B, "rag.embedQuery uses SELECT * while fields are never-embed"),
+        Rule("embed-query-star", B, "rag.embedQuery uses SELECT * while fields are never-embed"),
+        Rule("manifest-invalid", B, "AI systems manifest or policy pack is invalid"),
+        Rule("ai-input-missing", B, "AI system lists an input that is not a contract"),
+        Rule("undeclared-ai-system", B, "Contract feeds an embedder that no AI system declares"),
+        Rule("purpose-not-allowed", B, "AI system uses data for a purpose the contract does not allow"),
+        Rule("use-not-allowed", B, "AI system uses data in a way the contract or policy forbids"),
         Rule("index-changed", R, "Embedding model, dimension or chunking changed"),
         Rule("embed-scope-changed", R, "Set of embedded fields changed"),
         Rule("embedded-type-changed", R, "Type of an embedded field changed"),
@@ -53,8 +60,11 @@ RULES: dict[str, Rule] = {
         Rule("possible-pii", W, "New column looks like personal data but is not classified"),
         Rule("no-filter-keys", W, "RAG contract declares no filter keys"),
         Rule("embed-scope-undeclared", W, "RAG contract does not declare rag.embed"),
+        Rule("governance-missing", W, "Contract feeds an AI system but has no governance block"),
+        Rule("risk-class-missing", W, "AI system declares no risk class"),
         Rule("field-undeclared", I, "New source column not in the contract"),
         Rule("contract-added", I, "New contract"),
+        Rule("ai-system-added", I, "New AI system"),
     ]
 }
 
@@ -435,3 +445,147 @@ def embed_scope(
                 )
             )
     return out
+
+
+def _g(rule: str, message: str, contract: str | None, system: AISystem | None, file: str, **kw) -> Finding:
+    return Finding(
+        rule=rule,
+        severity=RULES[rule].severity,
+        message=message,
+        contract=contract,
+        system=system.id if system else None,
+        file=file,
+        **kw,
+    )
+
+
+def _feeds_embedder(contract: Contract) -> bool:
+    return contract.rag is not None and bool(contract.rag.code or contract.rag.embed_query)
+
+
+def governance(contracts: list[Contract], manifest: Manifest | None, policies: PolicyPack | None) -> list[Finding]:
+    """Is every AI system declared, and does it use each input only as allowed?
+
+    Runs only when the repository has an AI systems manifest, so adopting the
+    governance rules is a deliberate step.
+    """
+    if manifest is None:
+        return []
+    out: list[Finding] = []
+    by_id = {c.id: c for c in contracts}
+    forbidden = policies.forbidden_uses if policies else []
+    fed: set[str] = set()
+    for system in manifest.systems:
+        if system.risk_class is None:
+            out.append(
+                _g(
+                    "risk-class-missing",
+                    f"AI system `{system.id}` declares no `riskClass`.",
+                    None,
+                    system,
+                    manifest.path,
+                    hint="Declare its EU AI Act tier (minimal, limited, high) so the inventory and evidence can show it.",
+                )
+            )
+        for cid in system.inputs:
+            contract = by_id.get(cid)
+            if contract is None:
+                out.append(
+                    _g(
+                        "ai-input-missing",
+                        f"AI system `{system.id}` lists input `{cid}`, but no contract has that id.",
+                        None,
+                        system,
+                        manifest.path,
+                        field=cid,
+                        hint="Fix the id, or add a contract for the source so its use can be checked.",
+                    )
+                )
+                continue
+            fed.add(cid)
+            gov = contract.governance
+            if gov and gov.purposes and system.purpose not in gov.purposes:
+                used = f"for `{system.purpose}`" if system.purpose else "without declaring a purpose"
+                allowed = ", ".join(f"`{p}`" for p in gov.purposes)
+                out.append(
+                    _g(
+                        "purpose-not-allowed",
+                        f"AI system `{system.id}` uses `{cid}` {used}, but the contract allows only {allowed}.",
+                        cid,
+                        system,
+                        manifest.path,
+                        hint="Change the system's purpose, or have the data owner add the purpose to the contract.",
+                    )
+                )
+            if gov and gov.allowed_uses and system.use not in gov.allowed_uses:
+                allowed = ", ".join(f"`{u}`" for u in gov.allowed_uses)
+                out.append(
+                    _g(
+                        "use-not-allowed",
+                        f"AI system `{system.id}` uses `{cid}` for `{system.use}`, but the contract allows only {allowed}.",
+                        cid,
+                        system,
+                        manifest.path,
+                    )
+                )
+            for rule in forbidden:
+                if system.use not in rule.uses:
+                    continue
+                for field in contract.fields:
+                    if (field.classification or "").lower() == rule.classification.lower():
+                        out.append(
+                            _g(
+                                "use-not-allowed",
+                                f"AI system `{system.id}` uses `{cid}` for `{system.use}`, but `{field.name}` is "
+                                f"classified `{field.classification}` and {policies.path} forbids that use.",
+                                cid,
+                                system,
+                                manifest.path,
+                                field=field.name,
+                                hint="Leave the field out of this system's input, or use a de-identified copy.",
+                            )
+                        )
+    require = bool(policies and policies.require_governance)
+    for contract in contracts:
+        if _feeds_embedder(contract) and contract.id not in fed:
+            out.append(
+                _g(
+                    "undeclared-ai-system",
+                    f"`{contract.id}` feeds an embedder, but no AI system in {manifest.path} lists it as an input.",
+                    contract.id,
+                    None,
+                    contract.path,
+                    hint="Add the system that uses it to the manifest, with its purpose and providers.",
+                )
+            )
+        if contract.governance is None and (contract.id in fed or _feeds_embedder(contract)):
+            sensitive = [f.name for f in contract.fields if f.sensitive]
+            if sensitive or require:
+                why = (
+                    "it holds " + ", ".join(f"`{n}`" for n in sensitive)
+                    if sensitive
+                    else f"{policies.path} requires one"  # type: ignore[union-attr]
+                )
+                out.append(
+                    _g(
+                        "governance-missing",
+                        f"`{contract.id}` feeds an AI system but has no governance block, and {why}.",
+                        contract.id,
+                        None,
+                        contract.path,
+                        hint="Add `governance:` with its purposes and allowed uses.",
+                    )
+                )
+    return out
+
+
+def systems_evolution(base: Manifest | None, head: Manifest | None) -> list[Finding]:
+    """What changed in the manifest between base and head."""
+    if head is None:
+        return []
+    old = {s.id for s in base.systems} if base else set()
+    return [
+        _g("ai-system-added", f"New AI system `{s.id}` ({s.use}).", None, s, head.path)
+        for s in head.systems
+        if s.id not in old
+    ]

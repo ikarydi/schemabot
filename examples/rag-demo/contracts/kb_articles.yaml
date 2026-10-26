@@ -20,3 +20,7 @@ rag:
   index:
     model: text-embedding-3-small
     dimension: 1536
+governance:
+  owner: docs-team
+  purposes: [support-search, agent-assist, docs-search]
+  allowedUses: [rag, eval]

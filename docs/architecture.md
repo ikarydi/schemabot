@@ -29,6 +29,7 @@ pull request ──► GitHub Actions runner (customer's repo, no SchemaBot serv
 | `rules.py` | Every rule, its severity, and the finding text. |
 | `check.py` | Runs base vs head, marks pre-existing findings. |
 | `report.py` | Markdown, text, JSON and SARIF output. |
+| `governance.py` | AI systems manifest and org policy pack; models and loaders. |
 | `explain.py` | Optional Claude summary (`schemabot[llm]`). |
 | `cli.py` / `action.yml` | Entry points. |
 
@@ -48,6 +49,28 @@ rest.
 | 6 | Stack | Python 3.10+, pydantic, sqlglot, PyYAML | The data-engineering ecosystem is Python. |
 | 7 | Licence / model | Open core, Apache 2.0 | Distribution through GitHub; charge later for the hosted App, history and alerts. |
 | 8 | LogicLens | Deferred | Keep the first build on one wedge. |
+
+## AI data governance decisions (October 2026)
+
+J asked for an AI data governance extension on 2026-10-26 and approved the
+recommended option for each open question the same day. The full design is in
+the governance architecture doc.
+
+| # | Decision | Chosen | Why |
+|---|---|---|---|
+| G1 | Slice | AI data use, checked at build time | Runtime agent governance is crowded and being bundled by the platforms; model GRC is sold top-down. No one enforces data use in CI. |
+| G2 | Where AI systems are declared | A separate `ai-systems.yaml` | One system reads many contracts; platform teams own systems, data owners own contracts. |
+| G3 | Uses covered | RAG, fine-tuning and eval | Fine-tuning on customer data is what lawyers ask about; prompt-context tracing is too dynamic for now. |
+| G4 | Org policy pack | Local `policies.yaml` first | A central pack becomes a hosted-App feature. |
+| G5 | Erasure check | Static check that the declared deletion reaches the vector store | A runtime deletion test comes later as a scheduled job. |
+| G6 | Approval gate | SchemaBot reads PR reviews and blocks | Falls back to a warning when the token cannot read reviews. |
+| G7 | Compliance framing | EU AI Act + GDPR evidence | ISO/IEC 42001 and NIST AI RMF mappings later; say "evidence", never "compliant". |
+| G8 | Positioning | One product, SchemaBot with governance | One install, one contract. |
+
+Build phases: (1) governance block, manifest, policy pack and the first rules
+(this release); (2) provider and region detection, lineage graph; (3) erasure
+and retention; (4) approvals, `schemabot inventory` and `schemabot evidence`;
+(5) hosted App features.
 
 ## Next steps after the MVP
 

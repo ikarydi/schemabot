@@ -1,0 +1,14 @@
+# Every AI system this repository builds, and the contracts that feed it.
+apiVersion: v1
+kind: AISystems
+systems:
+  - id: support-copilot
+    use: rag
+    purpose: agent-assist
+    owner: support-platform
+    inputs: [support-tickets, kb-articles]
+    code: [ingest/]
+    providers:
+      - {name: openai, role: embedding, model: text-embedding-3-small, region: eu}
+      - {name: anthropic, role: generation, region: eu}
+    riskClass: limited

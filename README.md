@@ -14,6 +14,11 @@ It also catches the classic contract breaks (missing fields, type changes, a
 required field becoming nullable) and flags new columns that look like personal
 data.
 
+With an AI systems manifest it also governs **what data feeds which AI system**:
+a pull request fails when a system uses data for a purpose or a use (RAG,
+fine-tuning, evaluation) that the data's contract does not allow, or when code
+embeds data that no declared AI system accounts for.
+
 Everything runs inside your own CI. No data, credentials or code leave the
 runner, and there is no SchemaBot server.
 
@@ -102,6 +107,56 @@ A full working example lives in [`examples/rag-demo`](examples/rag-demo).
 
 Types are normalized, so `text`, `varchar(255)`, `str` and `string` all match.
 
+## AI data governance
+
+Governance is opt-in: it runs when the project has an `ai-systems.yaml`.
+
+1. Add a `governance` block to the contracts whose data AI systems use:
+
+   ```yaml
+   governance:
+     owner: support-platform
+     purposes: [support-search, agent-assist]   # what AI systems may use it for
+     allowedUses: [rag]                         # rag | finetune | eval | prompt
+     legalBasis: legitimate-interest
+     residency: [eu]
+     retention: {days: 365, erasure: true}
+     deletion: ingest/tickets.py:delete_ticket
+     approvers: ["@acme/privacy"]
+   ```
+
+2. List every AI system the repository builds in `ai-systems.yaml`:
+
+   ```yaml
+   apiVersion: v1
+   kind: AISystems
+   systems:
+     - id: support-copilot
+       use: rag                       # rag | finetune | eval | prompt
+       purpose: agent-assist
+       inputs: [support-tickets, kb-articles]   # contract ids
+       code: [ingest/]
+       providers:
+         - {name: openai, role: embedding, model: text-embedding-3-small, region: eu}
+       riskClass: limited             # minimal | limited | high | unacceptable
+   ```
+
+3. Optionally add rules for every contract in `policies.yaml`:
+
+   ```yaml
+   apiVersion: v1
+   kind: PolicyPack
+   requireGovernance: true            # every contract that feeds AI needs a governance block
+   forbiddenUses:
+     - {classification: pii, uses: [finetune]}
+     - {classification: phi, uses: [finetune, eval]}
+   ```
+
+`residency`, `retention`, `deletion`, `approvers` and `providers` are recorded
+now and checked by upcoming rules (provider and region allow-lists, the erasure
+path to the vector store, and approval of relaxed governance). Use `--systems`
+and `--policies` (or the Action inputs of the same name) for other file paths.
+
 ## Rules
 
 | Severity | Rule | When |
@@ -118,6 +173,11 @@ Types are normalized, so `text`, `varchar(255)`, `str` and `string` all match.
 | 🛑 breaking | `contract-guarantee-relaxed` | The contract made a required field optional. |
 | 🛑 breaking | `embed-query-star` | `rag.embedQuery` selects `*` while never-embed fields exist. |
 | 🛑 breaking | `contract-invalid` | A contract file does not parse or validate. |
+| 🛑 breaking | `purpose-not-allowed` | An AI system uses a contract for a purpose the contract does not list. |
+| 🛑 breaking | `use-not-allowed` | An AI system's use (RAG, fine-tuning, ...) is not in the contract's `allowedUses`, or the policy pack forbids it for a field's classification. |
+| 🛑 breaking | `undeclared-ai-system` | A contract feeds an embedder, but no AI system lists it as an input. |
+| 🛑 breaking | `ai-input-missing` | An AI system lists an input that is not a contract id. |
+| 🛑 breaking | `manifest-invalid` | `ai-systems.yaml` or `policies.yaml` does not parse or validate. |
 | 🔁 re-index | `index-changed` | Embedding model, dimension or chunking changed. |
 | 🔁 re-index | `embed-scope-changed` | The set of embedded fields changed. |
 | 🔁 re-index | `embedded-type-changed` | An embedded field changed type. |
@@ -127,7 +187,9 @@ Types are normalized, so `text`, `varchar(255)`, `str` and `string` all match.
 | ⚠️ warning | `contract-field-removed` / `contract-removed` | A field or a whole contract was removed. |
 | ⚠️ warning | `column-removed` / `column-type-changed` | An undeclared column was dropped or retyped. |
 | ⚠️ warning | `no-filter-keys` / `embed-scope-undeclared` | The `rag` block is missing filter keys or the embed list. |
-| ℹ️ info | `field-undeclared` / `contract-added` | New column not in the contract; new contract. |
+| ⚠️ warning | `governance-missing` | A contract that feeds an AI system holds sensitive fields (or the policy pack requires governance) but has no `governance` block. |
+| ⚠️ warning | `risk-class-missing` | An AI system declares no `riskClass`. |
+| ℹ️ info | `field-undeclared` / `contract-added` / `ai-system-added` | New column not in the contract; new contract; new AI system. |
 
 Problems that already exist on the base branch are reported as pre-existing and
 never fail the check, so adopting SchemaBot on an imperfect codebase does not
@@ -139,6 +201,8 @@ block unrelated pull requests.
 |---|---|---|
 | `root` | `.` | Project root inside the repo. |
 | `contracts` | `contracts` | Contract directory, relative to `root`. |
+| `systems` | `ai-systems.yaml` | AI systems manifest, relative to `root`. Governance runs when it exists. |
+| `policies` | `policies.yaml` | Org policy pack, relative to `root`. |
 | `base` | PR base commit | Revision to compare with. |
 | `fail-on` | `breaking` | `breaking`, `reindex`, `warning`, `info` or `never`. |
 | `comment` | `true` | Post a sticky PR comment. |
