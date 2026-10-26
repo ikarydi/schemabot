@@ -23,3 +23,12 @@ rag:
     model: text-embedding-3-small
     dimension: 1536
     chunking: {strategy: recursive, size: 800, overlap: 100}
+governance:
+  owner: support-platform
+  approvers: ["@acme/privacy"]
+  purposes: [support-search, agent-assist]   # what AI systems may use this data for
+  legalBasis: legitimate-interest
+  residency: [eu]
+  retention: {days: 365, erasure: true}
+  deletion: ingest/tickets.py:delete_ticket
+  allowedUses: [rag]                       # rag | finetune | eval | prompt

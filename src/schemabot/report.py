@@ -35,7 +35,7 @@ def _summary_line(result: CheckResult) -> str:
         n = result.count(sev)
         if n:
             parts.append(f"{n} {sev.label}")
-    checked = sum(1 for r in result.results if r.status != "removed")
+    checked = sum(1 for r in result.results if r.status not in ("removed", "systems"))
     return f"{checked} contract{'s' if checked != 1 else ''} checked" + (": " + ", ".join(parts) if parts else "")
 
 
@@ -65,7 +65,7 @@ def to_markdown(result: CheckResult, threshold: Severity | None = Severity.BREAK
         old = [f for f in res.findings if f.preexisting]
         if not (new or info or old or res.warnings):
             continue
-        status = "" if res.status in ("unchanged", "checked") else f" · {res.status}"
+        status = "" if res.status in ("unchanged", "checked", "systems") else f" · {res.status}"
         lines += ["", f"### `{res.contract_id}`{status}", ""]
         if new:
             lines += ["| | Rule | Finding | Where |", "|---|---|---|---|"]

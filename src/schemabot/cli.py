@@ -61,7 +61,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"schemabot: {exc}", file=sys.stderr)
             return 2
 
-    result = run_check(head, args.contracts, base)
+    result = run_check(head, args.contracts, base, args.systems, args.policies)
 
     if args.explain:
         from .explain import explain
@@ -92,7 +92,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     if not head.is_dir(args.contracts):
         print(f"schemabot: contracts directory {args.contracts!r} not found under {root}", file=sys.stderr)
         return 2
-    result = run_check(head, args.contracts, None)
+    result = run_check(head, args.contracts, None, args.systems, args.policies)
     sys.stdout.write(to_text(result, args.fail_on))
     return 1 if result.fails(args.fail_on) else 0
 
@@ -111,6 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--contracts",
         default=os.environ.get("SCHEMABOT_CONTRACTS", "contracts"),
         help="directory of contract YAML files, relative to --root (default: contracts)",
+    )
+    common.add_argument(
+        "--systems",
+        default=os.environ.get("SCHEMABOT_SYSTEMS", "ai-systems.yaml"),
+        help="AI systems manifest, relative to --root; governance rules run when it exists (default: ai-systems.yaml)",
+    )
+    common.add_argument(
+        "--policies",
+        default=os.environ.get("SCHEMABOT_POLICIES", "policies.yaml"),
+        help="org policy pack, relative to --root (default: policies.yaml)",
     )
     common.add_argument(
         "--fail-on",

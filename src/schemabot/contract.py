@@ -3,7 +3,8 @@
 A contract is a YAML file, one per source a pipeline reads. The format is a
 subset of the Open Data Contract Standard (ODCS v3) with a ``rag`` block that
 says what may be embedded, what never may, and which keys the retriever must
-filter on.
+filter on, and an optional ``governance`` block that says what the data may be
+used for by AI systems.
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ from .snapshot import Snapshot
 from .types import normalize_type
 
 SENSITIVE_CLASSES = {"pii", "secret", "restricted", "sensitive", "phi", "pci"}
+
+# How an AI system uses data: retrieval, fine-tuning, evaluation, or prompt context.
+AIUse = Literal["rag", "finetune", "eval", "prompt"]
 
 
 class ContractField(BaseModel):
@@ -87,6 +91,28 @@ class RagSpec(BaseModel):
     embed_query: str | None = Field(None, alias="embedQuery")
 
 
+class Retention(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    days: int | None = Field(None, ge=1)
+    erasure: bool = False
+
+
+class Governance(BaseModel):
+    """What AI systems may do with this data. Every key is optional."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    owner: str | None = None
+    approvers: list[str] = Field(default_factory=list)
+    purposes: list[str] = Field(default_factory=list)
+    legal_basis: str | None = Field(None, alias="legalBasis")
+    residency: list[str] = Field(default_factory=list)
+    retention: Retention | None = None
+    deletion: str | None = None
+    allowed_uses: list[AIUse] = Field(default_factory=list, alias="allowedUses")
+
+
 class Contract(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -97,6 +123,7 @@ class Contract(BaseModel):
     source: Source
     fields: list[ContractField] = Field(alias="schema")
     rag: RagSpec | None = None
+    governance: Governance | None = None
 
     # Set by the loader, not by the YAML.
     path: str = Field("", exclude=True)
@@ -142,7 +169,7 @@ class ContractError(Exception):
         self.message = message
 
 
-def _format_validation(err: ValidationError) -> str:
+def format_validation(err: ValidationError) -> str:
     parts = []
     for e in err.errors():
         loc = ".".join(str(p) for p in e["loc"])
@@ -161,7 +188,7 @@ def parse_contract(text: str, path: str = "<contract>") -> Contract:
     try:
         contract = Contract.model_validate(data)
     except ValidationError as exc:
-        raise ContractError(path, _format_validation(exc)) from exc
+        raise ContractError(path, format_validation(exc)) from exc
     contract.path = path
     return contract
 

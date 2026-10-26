@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from .contract import Contract, load_contracts
+from .contract import Contract, ContractError, load_contracts
 from .extract import TableSchema, extract
 from .findings import CheckResult, ContractResult, Finding, Severity
-from .rules import RULES, conformance, drift, embed_scope, evolution, policy
+from .governance import Manifest, load_manifest, load_policies
+from .rules import RULES, conformance, drift, embed_scope, evolution, governance, policy, systems_evolution
 from .scan import QueryScan, scan_code, scan_query
 from .snapshot import Snapshot
 
@@ -46,12 +47,47 @@ def _state_findings(
     return schema, findings
 
 
-def run_check(head: Snapshot, contracts_dir: str, base: Snapshot | None = None) -> CheckResult:
+def _governance(
+    snapshot: Snapshot, contracts: list[Contract], systems: str, policies: str
+) -> tuple[Manifest | None, list[Finding]]:
+    """Load the manifest and policy pack and run the governance rules over them."""
+    errors: list[Finding] = []
+    manifest = pack = None
+    try:
+        manifest = load_manifest(snapshot, systems)
+    except ContractError as exc:
+        errors.append(_manifest_invalid(exc))
+    try:
+        pack = load_policies(snapshot, policies)
+    except ContractError as exc:
+        errors.append(_manifest_invalid(exc))
+    return manifest, errors + governance(contracts, manifest, pack)
+
+
+def _manifest_invalid(err: ContractError) -> Finding:
+    return Finding(
+        rule="manifest-invalid",
+        severity=RULES["manifest-invalid"].severity,
+        message=err.message,
+        file=err.path,
+    )
+
+
+def run_check(
+    head: Snapshot,
+    contracts_dir: str,
+    base: Snapshot | None = None,
+    systems: str = "ai-systems.yaml",
+    policies: str = "policies.yaml",
+) -> CheckResult:
     """Check every contract in ``contracts_dir`` at ``head``, against ``base`` when given.
 
     With a base, findings that already existed on the base branch are marked
     pre-existing: they are reported but never fail the check, so an old problem
     does not block every unrelated pull request.
+
+    ``systems`` and ``policies`` are the AI systems manifest and the policy
+    pack, relative to the root; the governance rules run when the manifest exists.
     """
     result = CheckResult(base_label=base.label if base else None, head_label=head.label)
     head_contracts, errors = load_contracts(head, contracts_dir)
@@ -59,6 +95,7 @@ def run_check(head: Snapshot, contracts_dir: str, base: Snapshot | None = None) 
     if base is not None:
         loaded, _ = load_contracts(base, contracts_dir)
         base_contracts = {c.id: c for c in loaded}
+    by_id: dict[str, ContractResult] = {}
 
     for err in errors:
         result.results.append(
@@ -102,8 +139,9 @@ def run_check(head: Snapshot, contracts_dir: str, base: Snapshot | None = None) 
             for f in findings:
                 if f.key() in baseline:
                     f.preexisting = True
-        res.findings = sorted(findings, key=lambda f: (-f.severity, f.rule, f.field or ""))
+        res.findings = findings
         result.results.append(res)
+        by_id[contract.id] = res
 
     for cid, old in base_contracts.items():
         if any(c.id == cid for c in head_contracts):
@@ -124,6 +162,24 @@ def run_check(head: Snapshot, contracts_dir: str, base: Snapshot | None = None) 
                 ],
             )
         )
+
+    head_manifest, gov_findings = _governance(head, head_contracts, systems, policies)
+    if base is not None:
+        base_manifest, base_gov = _governance(base, list(base_contracts.values()), systems, policies)
+        gov_findings += systems_evolution(base_manifest, head_manifest)
+        baseline = {f.key() for f in base_gov}
+        for f in gov_findings:
+            if f.key() in baseline:
+                f.preexisting = True
+    systems_result = ContractResult(contract_id=systems, contract_path=systems, status="systems")
+    for f in gov_findings:
+        target = by_id.get(f.contract or "")
+        (target or systems_result).findings.append(f)
+    if systems_result.findings:
+        result.results.append(systems_result)
+
+    for res in result.results:
+        res.findings.sort(key=lambda f: (-f.severity, f.rule, f.field or "", f.system or ""))
     return result
 
 

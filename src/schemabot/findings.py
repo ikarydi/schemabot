@@ -43,11 +43,12 @@ class Finding:
     file: str | None = None
     line: int | None = None
     hint: str | None = None
+    system: str | None = None  # the AI system a governance finding is about
     # Already present on the base branch: reported, but never fails the check.
     preexisting: bool = False
 
     def key(self) -> tuple:
-        return (self.rule, self.contract, self.field)
+        return (self.rule, self.contract, self.field, self.system)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -61,7 +62,7 @@ class ContractResult:
     contract_path: str
     findings: list[Finding] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)  # tool limitations, not policy findings
-    status: str = "unchanged"  # new | changed | unchanged | removed | invalid
+    status: str = "unchanged"  # new | changed | unchanged | removed | invalid | systems
 
 
 @dataclass
