@@ -44,11 +44,12 @@ class Finding:
     line: int | None = None
     hint: str | None = None
     system: str | None = None  # the AI system a governance finding is about
+    provider: str | None = None  # the model provider a governance finding is about
     # Already present on the base branch: reported, but never fails the check.
     preexisting: bool = False
 
     def key(self) -> tuple:
-        return (self.rule, self.contract, self.field, self.system)
+        return (self.rule, self.contract, self.field, self.system, self.provider)
 
     def to_dict(self) -> dict:
         data = asdict(self)

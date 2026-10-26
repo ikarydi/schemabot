@@ -8,7 +8,8 @@ by its own CI.
 - `ingest/` embeds tickets with LangChain and articles with the OpenAI API.
 - `contracts/` holds one contract per source, each with a `governance` block.
 - `ai-systems.yaml` declares the one AI system (a support copilot) and its inputs.
-- `policies.yaml` forbids fine-tuning on PII and any training or eval on PHI.
+- `policies.yaml` forbids fine-tuning on PII and any training or eval on PHI,
+  and allows PII to reach only OpenAI, Anthropic and local models.
 
 Try it from the repository root:
 
@@ -30,4 +31,12 @@ Or point the copilot at a purpose the contracts do not allow:
 ```bash
 sed -i 's/purpose: agent-assist/purpose: marketing/' examples/rag-demo/ai-systems.yaml
 schemabot check --root examples/rag-demo --base HEAD
+```
+
+Or move the embedder out of the EU, and print the lineage:
+
+```bash
+sed -i 's/region: eu}/region: us-east-1}/' examples/rag-demo/ai-systems.yaml
+schemabot check --root examples/rag-demo --base HEAD
+schemabot lineage --root examples/rag-demo --format mermaid
 ```

@@ -71,6 +71,13 @@ class ForbiddenUse(BaseModel):
     uses: list[AIUse]
 
 
+class AllowedProviders(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    classification: str
+    providers: list[str]
+
+
 class PolicyPack(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -79,6 +86,8 @@ class PolicyPack(BaseModel):
     # Every contract that feeds an AI system needs a governance block, not only sensitive ones.
     require_governance: bool = Field(False, alias="requireGovernance")
     forbidden_uses: list[ForbiddenUse] = Field(default_factory=list, alias="forbiddenUses")
+    # Fields with this classification may only reach these providers.
+    allowed_providers: list[AllowedProviders] = Field(default_factory=list, alias="allowedProviders")
 
     path: str = Field("", exclude=True)
 

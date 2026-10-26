@@ -111,6 +111,7 @@ class Governance(BaseModel):
     retention: Retention | None = None
     deletion: str | None = None
     allowed_uses: list[AIUse] = Field(default_factory=list, alias="allowedUses")
+    allowed_providers: list[str] = Field(default_factory=list, alias="allowedProviders")
 
 
 class Contract(BaseModel):
